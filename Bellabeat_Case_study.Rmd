@@ -1,0 +1,305 @@
+---
+title: "Bellabeat Case Study: Smart Device Usage Analysis"
+author: "Marcin Klonowicz"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(ggrepel)
+```
+
+## 1. Ask
+
+### Business Task
+The goal of this analysis is to identify trends in smart device usage among FitBit users and apply these insights to Bellabeat's marketing strategy.
+
+### Key Questions
+- What are the trends in smart device usage?
+- How do these trends apply to Bellabeat customers?
+- How can these trends influence Bellabeat's marketing strategy?
+
+## 2. Prepare
+
+### Data Source
+The data used in this analysis is the FitBit Fitness Tracker Dataset, publicly available on Kaggle. It was collected from 35 FitBit users who consented to share their personal tracker data between March and May 2016.
+
+### Limitations
+- Small sample size (n=35) — results may not be statistically representative
+- No demographic information available (age, gender, location)
+- Data collected in 2016 — user behavior may have changed since then
+- Not all users tracked all metrics: sleep (n=23), weight (n=11)
+- Short collection period (approximately 2 months)
+- Some weight entries were manually logged and may be less accurate
+
+### Tools Used
+This analysis was conducted entirely in R, using the following packages:
+- **tidyverse** — data manipulation and visualization (dplyr, ggplot2, tidyr)
+- **lubridate** — date and time parsing
+- **janitor** — data cleaning and column name standardization
+- **ggrepel** — improved label placement in visualizations
+
+## 3. Process
+
+```{r load-data}
+daily_activity <- read_csv("dailyActivity_merged.csv")
+minute_sleep <- read_csv("minuteSleep_merged.csv")
+hourly_steps <- read_csv("hourlySteps_merged.csv")
+weight_log <- read_csv("weightLogInfo_merged.csv")
+```
+
+```{r clean-data}
+daily_activity <- daily_activity %>%
+  clean_names() %>%
+  mutate(
+    id = as.character(id),
+    activity_date = mdy(activity_date)
+  )
+
+hourly_steps <- hourly_steps %>%
+  clean_names() %>%
+  mutate(
+    id = as.character(id),
+    activity_hour = mdy_hms(activity_hour)
+  )
+
+minute_sleep <- minute_sleep %>%
+  clean_names() %>%
+  mutate(
+    id = as.character(id),
+    date = mdy_hms(date),
+    date_only = as_date(date)
+  )
+
+sleep_day <- minute_sleep %>%
+  group_by(id, date_only) %>%
+  summarise(
+    total_minutes_asleep = sum(value == 1),
+    total_minutes_restless = sum(value == 2),
+    total_minutes_awake = sum(value == 3),
+    total_time_in_bed = n(),
+    .groups = "drop"
+  ) %>%
+  rename(activity_date = date_only)
+
+weight_log <- weight_log %>%
+  clean_names() %>%
+  mutate(
+    id = as.character(id),
+    date = mdy_hms(date),
+    date_only = as_date(date)
+  )
+
+daily_activity_clean <- daily_activity %>%
+  filter(total_steps > 0, calories > 0)
+
+activity_sleep <- daily_activity_clean %>%
+  inner_join(sleep_day, by = c("id", "activity_date"))
+```
+## 4. Analyze & 5. Share
+
+### 4.1 Activity Analysis
+
+#### How many steps are users taking daily?
+```{r steps-distribution}
+ggplot(daily_activity_clean, aes(x = total_steps)) +
+  geom_histogram(bins = 30, fill = "#4CAF50", color = "white") +
+  geom_vline(xintercept = 10000, color = "red", linetype = "dashed", linewidth = 1) +
+  labs(
+    title = "Distribution of Daily Steps",
+    subtitle = "Red line = recommended 10,000 steps",
+    x = "Total Steps",
+    y = "Number of Days"
+  ) +
+  theme_minimal()
+```
+
+The majority of users fall below the recommended 10,000 steps per day. The mean daily step count is 6,547 — only 65% of the recommended target.
+
+#### When are users most active during the day?
+```{r hourly-steps}
+hourly_steps_summary <- hourly_steps %>%
+  mutate(hour = hour(activity_hour)) %>%
+  group_by(hour) %>%
+  summarise(avg_steps = mean(step_total))
+
+ggplot(hourly_steps_summary, aes(x = hour, y = avg_steps)) +
+  geom_col(fill = "#4CAF50") +
+  labs(
+    title = "Average Steps by Hour of Day",
+    subtitle = "When are users most active?",
+    x = "Hour of Day",
+    y = "Average Steps"
+  ) +
+  scale_x_continuous(breaks = 0:23) +
+  theme_minimal()
+```
+
+Two clear activity peaks emerge: at **12:00** (lunch break) and **19:00** (after work). Activity drops sharply after 20:00.
+
+#### Steps vs Calories Burned
+```{r steps-calories}
+ggplot(daily_activity_clean, aes(x = total_steps, y = calories, 
+                                  color = sedentary_minutes)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  scale_color_gradient(low = "steelblue", high = "orange") +
+  labs(
+    title = "Steps vs Calories Burned",
+    subtitle = "Color indicates sedentary minutes per day",
+    x = "Total Steps",
+    y = "Calories Burned",
+    color = "Sedentary Minutes"
+  ) +
+  theme_minimal()
+```
+
+There is a strong positive correlation between daily steps and calories burned — the more active the user, the more energy they expend.
+
+### 4.2 Sleep Analysis
+
+#### How long are users sleeping?
+```{r sleep-distribution}
+ggplot(sleep_day, aes(x = total_minutes_asleep)) +
+  geom_histogram(bins = 30, fill = "#5C6BC0", color = "white") +
+  geom_vline(xintercept = 420, color = "red", linetype = "dashed", linewidth = 1) +
+  labs(
+    title = "Distribution of Daily Sleep Duration",
+    subtitle = "Red line = recommended 7 hours (420 minutes)",
+    x = "Minutes Asleep",
+    y = "Number of Days"
+  ) +
+  theme_minimal()
+```
+
+The mean sleep duration is 393 minutes (6.5 hours) — below the recommended 7-8 hours. A notable subset of users consistently sleeps less than 7 hours.
+
+#### Is there a relationship between steps and sleep?
+```{r steps-sleep}
+ggplot(activity_sleep, aes(x = total_steps, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#5C6BC0") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(
+    title = "Steps vs Sleep Duration",
+    subtitle = "Each point = one day for one user",
+    x = "Total Steps",
+    y = "Minutes Asleep"
+  ) +
+  theme_minimal()
+```
+
+No strong correlation was found between daily steps and sleep duration. Sleep appears to be driven by factors not captured in this dataset.
+
+#### Is there a relationship between calories burned and sleep?
+```{r calories-sleep}
+ggplot(activity_sleep, aes(x = calories, y = total_minutes_asleep)) +
+  geom_point(alpha = 0.5, color = "#FF7043") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) +
+  labs(
+    title = "Calories Burned vs Sleep Duration",
+    subtitle = "Each point = one day for one user",
+    x = "Calories Burned",
+    y = "Minutes Asleep"
+  ) +
+  theme_minimal()
+```
+
+Similarly, no meaningful correlation was found between calories burned and sleep duration.
+
+### 4.3 Sedentary Lifestyle Analysis
+
+#### How do users distribute their active time?
+```{r activity-distribution}
+activity_proportions <- daily_activity_clean %>%
+  summarise(
+    Sedentary = mean(sedentary_minutes),
+    Lightly_Active = mean(lightly_active_minutes),
+    Fairly_Active = mean(fairly_active_minutes),
+    Very_Active = mean(very_active_minutes)
+  ) %>%
+  pivot_longer(cols = everything(),
+               names_to = "activity_type",
+               values_to = "minutes") %>%
+  mutate(
+    percentage = round(minutes / sum(minutes) * 100, 1),
+    label = paste0(activity_type, ": ", percentage, "%"),
+    pos = cumsum(minutes) - minutes / 2
+  )
+
+ggplot(activity_proportions, aes(x = 2, y = minutes, fill = activity_type)) +
+  geom_col(width = 1) +
+  coord_polar(theta = "y") +
+  geom_label_repel(
+    aes(y = pos, label = label),
+    x = 2.8,
+    nudge_x = 0.8,
+    size = 3,
+    show.legend = FALSE,
+    segment.size = 0.4
+  ) +
+  xlim(0.5, 4) +
+  labs(
+    title = "Average Daily Activity Distribution",
+    subtitle = "In minutes per day",
+    fill = "Activity Type"
+  ) +
+  theme_void()
+```
+
+Users spend **80.5%** of their tracked day sedentary. Only 2.7% of the day involves moderate or intense physical activity.
+
+### 4.4 Weight Analysis
+
+```{r weight-bmi}
+ggplot(weight_log, aes(x = weight_kg, y = bmi)) +
+  geom_point(color = "#FF7043", size = 3, alpha = 0.7) +
+  geom_hline(yintercept = 24.9, color = "red", linetype = "dashed") +
+  labs(
+    title = "Weight vs BMI",
+    subtitle = "Red line = upper limit of healthy BMI (24.9)",
+    x = "Weight (kg)",
+    y = "BMI"
+  ) +
+  theme_minimal()
+```
+
+**Note:** With only 11 users logging weight data, these results are insufficient for statistical conclusions. The majority of logged entries show BMI above the healthy range, which may suggest that users with weight concerns are more motivated to track this metric.
+
+## 6. Act
+
+### Key Findings
+1. **Low daily step count** — average of 6,547 steps per day, well below the recommended 10,000
+2. **Tracker not worn regularly** — 13% of days recorded zero steps, suggesting inconsistent device usage
+3. **Two clear activity peaks** — users are most active at 12:00 and 19:00
+4. **Insufficient sleep** — average sleep duration of 6.5 hours, below the recommended 7-8 hours
+5. **Sedentary lifestyle** — users spend 80.5% of their day inactive
+6. **No correlation between activity and sleep** — sleep appears to be an independent variable
+7. **Limited weight data** — only 11 users logged weight, insufficient for conclusions
+
+### Recommendations for Bellabeat
+
+#### 1. Tracker Wear Reminders
+13% of days show no recorded activity, suggesting users frequently forget to wear their device. Bellabeat should implement morning push notifications prompting users to put on their tracker.
+
+#### 2. Personalized Step Goals
+Rather than defaulting to 10,000 steps — a target most users fail to reach — Bellabeat's app should suggest gradual, personalized goals based on each user's baseline activity level. Small wins drive long-term engagement.
+
+#### 3. Activity Notifications at Peak Hours
+Users are most active at 12:00 and 19:00. Bellabeat should schedule motivational nudges at 11:30 and 18:30 to encourage users to take a walk or workout during their naturally active windows.
+
+#### 4. Sleep Hygiene Features
+With average sleep below recommended levels, Bellabeat should introduce a "wind down" feature — a customizable bedtime reminder based on the user's sleep history and target sleep duration.
+
+#### 5. Hourly Movement Reminders
+Users spend over 80% of their day sedentary. Bellabeat should implement hourly movement reminders during prolonged inactive periods, similar to features found in Apple Watch and Garmin devices.
+
+### Limitations & Next Steps
+This analysis is based on a small, non-representative sample of 35 users collected in 2016. To validate these findings, Bellabeat should consider:
+- Collecting data from a larger, more diverse user base (500+ users)
+- Including demographic information (age, gender, occupation)
+- Extending the data collection period to at least 6 months
+- Adding nutrition tracking to explore the relationship between diet, activity and sleep
